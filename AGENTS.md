@@ -2,6 +2,44 @@
 
 This document helps AI coding assistants understand and work with this codebase.
 
+---
+
+## Git Workflow (IMPORTANT - Follow This Process)
+
+**Repository Structure:**
+- **Your fork:** `https://github.com/Nate0-1999/pr3dict` (where you push)
+- **Upstream:** `https://github.com/aerichmo/PR3DICT` (partner's repo, PRs go here)
+
+**For Every Feature:**
+
+```
+1. CREATE BRANCH on your fork
+   git checkout main
+   git pull origin main
+   git checkout -b feature-name
+
+2. WORK ON FEATURE
+   - Make changes
+   - Test thoroughly
+   - Commit with clear message
+
+3. PUSH BRANCH to your fork
+   git push -u origin feature-name
+
+4. CREATE PR to your fork's main
+   → PR: Nate0-1999/pr3dict feature-name → Nate0-1999/pr3dict main
+   → User manually reviews and approves in GitHub
+   → WAIT for approval before proceeding
+
+5. AFTER APPROVAL, PR to upstream
+   → PR: Nate0-1999/pr3dict main → aerichmo/PR3DICT main
+   → Partner reviews and merges
+```
+
+**Never push directly to main. Always use branches and PRs.**
+
+---
+
 ## Project Overview
 
 PR3DICT is a multi-strategy prediction market trading system. Current focus: **Dispute Prediction** on Polymarket.
