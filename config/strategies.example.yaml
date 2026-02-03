@@ -1,0 +1,183 @@
+# PR3DICT Strategy Configuration
+# This file defines which strategies are enabled and their parameters
+
+strategies:
+  # ============================================================================
+  # MARKET REBALANCING - HIGHEST ROI STRATEGY
+  # ============================================================================
+  # Based on analysis: Generated $29M of $40M total (73% of profits)
+  # Success rate: ~70%
+  # Average profit: $496/trade
+  # Frequency: 42% of multi-outcome markets show opportunities
+  
+  market_rebalancing:
+    enabled: true
+    
+    # Opportunity Detection
+    min_deviation: 0.02              # 2% minimum deviation from $1.00
+    max_deviation: 0.50              # 50% max (sanity check for data errors)
+    min_outcomes: 3                  # Require at least 3 outcomes
+    max_outcomes: 20                 # Avoid complexity explosion
+    
+    # Liquidity Requirements
+    min_liquidity_per_outcome: 500   # $500 minimum per outcome
+    min_total_liquidity: 2000        # $2K total market liquidity
+    min_liquidity_ratio: 0.3         # Min outcome liquidity ≥ 30% of max
+    
+    # VWAP Validation (critical for execution reality)
+    enable_vwap_check: true
+    vwap_depth_usd: 1000             # Calculate VWAP for $1K execution
+    vwap_slippage_tolerance: 0.01    # 1% max slippage from quoted price
+    
+    # Risk Management
+    max_position_size_usd: 5000      # $5K max per opportunity
+    min_profit_threshold: 0.05       # $0.05 minimum (covers gas costs)
+    max_time_to_resolution_hours: 720  # 30 days max
+    min_time_to_resolution_hours: 1.0  # 1 hour minimum
+    
+    # Position Sizing
+    kelly_fraction: 0.5              # Half-Kelly for safety
+    max_capital_per_trade: 0.10      # Max 10% of account per trade
+    
+    # Execution
+    execution_timeout_seconds: 30
+    require_parallel_execution: true  # All legs in same block
+    max_retries: 2
+    
+    # Bregman Projection (optimal sizing)
+    enable_bregman_sizing: true
+    convergence_threshold: 0.000001  # 1e-6
+    max_iterations: 50
+    
+    # Monitoring
+    alert_on_opportunity: true
+    log_missed_opportunities: true
+  
+  # ============================================================================
+  # SINGLE-CONDITION ARBITRAGE
+  # ============================================================================
+  # Based on analysis: Generated $10.6M (27% of profits)
+  # Success rate: 87%
+  # Frequency: 41% of markets show arbitrage
+  
+  arbitrage:
+    enabled: true
+    min_spread: 0.025                # 2.5% minimum profit
+    min_liquidity: 1000
+    max_time_to_resolution_hours: 720
+  
+  # ============================================================================
+  # MARKET MAKING (Advanced)
+  # ============================================================================
+  # Lower priority - requires more active management
+  
+  market_making:
+    enabled: false  # Disabled by default
+    
+    # Spread Parameters
+    min_spread: 0.02
+    base_spread: 0.04
+    max_spread: 0.12
+    
+    # Inventory Management
+    max_inventory: 50
+    target_inventory: 0
+    inventory_skew_threshold: 10
+    
+    # Risk
+    max_markets: 10
+    min_liquidity: 5000
+    max_time_to_resolution_hours: 168  # 7 days
+    min_time_to_resolution_hours: 0.5
+    
+    # Quotes
+    quote_size: 10
+    max_position_size: 100
+    max_quote_age_seconds: 30
+  
+  # ============================================================================
+  # BEHAVIORAL STRATEGIES (Future)
+  # ============================================================================
+  
+  behavioral:
+    enabled: false  # Not yet implemented
+    
+    # Overreaction fading
+    news_window_hours: 2
+    reversion_threshold: 0.10
+    
+    # Momentum
+    momentum_lookback_hours: 24
+    momentum_threshold: 0.15
+
+# ============================================================================
+# GLOBAL RISK MANAGEMENT
+# ============================================================================
+
+risk:
+  # Portfolio-level constraints
+  max_total_exposure_usd: 50000      # $50K max across all strategies
+  max_drawdown_pct: 0.15             # 15% max drawdown before pause
+  
+  # Per-strategy allocation
+  strategy_allocation:
+    market_rebalancing: 0.60         # 60% of capital (highest priority)
+    arbitrage: 0.30                  # 30% of capital
+    market_making: 0.10              # 10% of capital
+  
+  # Emergency stops
+  daily_loss_limit_pct: 0.05         # Stop all trading if -5% day
+  consecutive_losses_limit: 10       # Stop after 10 losses in a row
+
+# ============================================================================
+# EXECUTION SETTINGS
+# ============================================================================
+
+execution:
+  # Platform
+  default_platform: polymarket
+  
+  # Order execution
+  default_order_type: limit          # limit or market
+  limit_order_timeout_seconds: 60    # Cancel unfilled limits after 60s
+  
+  # Slippage protection
+  max_slippage_pct: 0.02             # 2% max slippage
+  
+  # Gas management (for blockchain platforms)
+  max_gas_price_gwei: 100            # Don't execute if gas > 100 gwei
+  gas_price_check_interval: 10      # Check every 10 seconds
+
+# ============================================================================
+# MONITORING & ALERTS
+# ============================================================================
+
+monitoring:
+  # Logging
+  log_level: INFO                    # DEBUG, INFO, WARNING, ERROR
+  log_to_file: true
+  log_file_path: ./logs/pr3dict.log
+  
+  # Performance tracking
+  track_performance: true
+  performance_window_hours: 24       # Calculate metrics over 24h windows
+  
+  # Alerts (if messaging configured)
+  alert_on_opportunity: true         # Alert on large opportunities
+  alert_on_execution_failure: true   # Alert on failed executions
+  alert_on_drawdown: true            # Alert on drawdown threshold
+  
+  # Alert thresholds
+  min_opportunity_alert_usd: 50      # Alert if profit > $50
+  execution_failure_threshold: 3     # Alert after 3 consecutive failures
+
+# ============================================================================
+# BACKTESTING (Optional)
+# ============================================================================
+
+backtest:
+  enabled: false
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 10000
+  commission_pct: 0.001              # 0.1% per trade

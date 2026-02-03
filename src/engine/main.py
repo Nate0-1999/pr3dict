@@ -16,6 +16,7 @@ from src.engine import TradingEngine, EngineConfig
 from src.platforms import KalshiPlatform
 from src.strategies import ArbitrageStrategy
 from src.risk import RiskManager, RiskConfig
+from src.notifications import NotificationManager, load_notification_config
 
 # Configure logging
 logging.basicConfig(
@@ -72,6 +73,15 @@ async def main():
     )
     risk_manager = RiskManager(risk_config)
     
+    # Initialize notifications (optional)
+    notification_config = load_notification_config()
+    notifier = None
+    if notification_config.telegram_enabled or notification_config.discord_enabled:
+        notifier = NotificationManager(notification_config)
+        logger.info("Notifications enabled")
+    else:
+        logger.info("Notifications disabled (set TELEGRAM_ENABLED or DISCORD_ENABLED in .env)")
+    
     # Initialize engine
     engine_config = EngineConfig(
         scan_interval_seconds=30,
@@ -83,7 +93,8 @@ async def main():
         platforms=platforms,
         strategies=strategies,
         risk_manager=risk_manager,
-        config=engine_config
+        config=engine_config,
+        notifications=notifier  # Add notifications
     )
     
     # Run
