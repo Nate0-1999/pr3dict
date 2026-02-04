@@ -23,6 +23,12 @@ class MarketDatabase:
     Tables:
     - markets: Raw market data from Polymarket Gamma API
     - analyses: LLM analysis results with dispute probability scores
+    - analysis_runs: Metadata for deterministic analysis replay
+    - analysis_outputs_t1: Tier 1 structured outputs
+    - analysis_outputs_t2: Tier 2 structured outputs
+    - signals: Generated trade signals and edge context
+    - market_outcomes: Ground truth settlement outcomes
+    - calibration_metrics: Offline model calibration artifacts
     """
     
     def __init__(self, db_path: Optional[Path] = None):
@@ -101,6 +107,109 @@ class MarketDatabase:
                 
                 FOREIGN KEY (market_id) REFERENCES markets(id)
             );
+
+            -- Deterministic analysis replay metadata
+            CREATE TABLE IF NOT EXISTS analysis_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id TEXT NOT NULL,
+                stage TEXT NOT NULL,                 -- tier1, tier2
+                run_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                strategy_version TEXT NOT NULL,
+                latency_ms INTEGER,
+                token_cost_usd REAL,
+                status TEXT NOT NULL,                -- success, invalid, failed
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(run_id),
+                FOREIGN KEY (market_id) REFERENCES markets(id)
+            );
+
+            -- Tier 1 output contract
+            CREATE TABLE IF NOT EXISTS analysis_outputs_t1 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_run_id INTEGER NOT NULL,
+                market_id TEXT NOT NULL,
+                screen_decision TEXT NOT NULL,       -- PASS, FLAG
+                ambiguity_score REAL NOT NULL CHECK (ambiguity_score >= 0 AND ambiguity_score <= 1),
+                dispute_prob_prior REAL NOT NULL CHECK (dispute_prob_prior >= 0 AND dispute_prob_prior <= 1),
+                top_risks TEXT NOT NULL,             -- JSON array
+                rationale_short TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id),
+                FOREIGN KEY (market_id) REFERENCES markets(id)
+            );
+
+            -- Tier 2 output contract
+            CREATE TABLE IF NOT EXISTS analysis_outputs_t2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_run_id INTEGER NOT NULL,
+                market_id TEXT NOT NULL,
+                p_dispute REAL NOT NULL CHECK (p_dispute >= 0 AND p_dispute <= 1),
+                p_yes_final REAL NOT NULL CHECK (p_yes_final >= 0 AND p_yes_final <= 1),
+                p_no_final REAL NOT NULL CHECK (p_no_final >= 0 AND p_no_final <= 1),
+                p_invalid_final REAL NOT NULL CHECK (p_invalid_final >= 0 AND p_invalid_final <= 1),
+                confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+                resolution_source_risk TEXT NOT NULL, -- low, medium, high
+                edge_cases TEXT NOT NULL,             -- JSON array
+                decision_path TEXT NOT NULL,          -- pre_dispute, post_proposal, active_dispute, initiate_dispute, no_trade
+                no_trade_reason TEXT,
+                assumptions TEXT NOT NULL,            -- JSON array
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id),
+                FOREIGN KEY (market_id) REFERENCES markets(id)
+            );
+
+            -- Signal artifacts for execution + replay
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id TEXT NOT NULL,
+                analysis_run_id INTEGER,
+                action TEXT NOT NULL,                -- ENTER_YES, ENTER_NO, EXIT, HOLD, NO_TRADE
+                side TEXT,                           -- yes, no, null for HOLD/NO_TRADE
+                confidence REAL CHECK (confidence >= 0 AND confidence <= 1),
+                edge_yes REAL,
+                edge_no REAL,
+                edge_selected REAL,
+                yes_price_snapshot REAL,
+                no_price_snapshot REAL,
+                liquidity_snapshot REAL,
+                reason_code TEXT NOT NULL,
+                reason_detail TEXT,
+                strategy_version TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (market_id) REFERENCES markets(id),
+                FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id)
+            );
+
+            -- Settled market labels for calibration and backtesting
+            CREATE TABLE IF NOT EXISTS market_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id TEXT NOT NULL UNIQUE,
+                disputed INTEGER NOT NULL,           -- 0,1
+                final_resolution TEXT NOT NULL,      -- YES, NO, INVALID
+                time_to_resolution_hours REAL,
+                source_run_id TEXT,
+                settled_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (market_id) REFERENCES markets(id)
+            );
+
+            -- Model calibration snapshots
+            CREATE TABLE IF NOT EXISTS calibration_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                strategy_version TEXT NOT NULL,
+                time_bucket TEXT NOT NULL,           -- e.g. 2026-W05
+                sample_size INTEGER NOT NULL,
+                brier_score REAL,
+                log_loss REAL,
+                calibration_error REAL,
+                metadata_json TEXT,                  -- arbitrary JSON
+                created_at TEXT NOT NULL
+            );
             
             -- Indexes for common queries
             CREATE INDEX IF NOT EXISTS idx_markets_liquidity ON markets(liquidity);
@@ -108,6 +217,12 @@ class MarketDatabase:
             CREATE INDEX IF NOT EXISTS idx_markets_end_date ON markets(end_date);
             CREATE INDEX IF NOT EXISTS idx_analyses_market ON analyses(market_id);
             CREATE INDEX IF NOT EXISTS idx_analyses_dispute_prob ON analyses(dispute_probability);
+            CREATE INDEX IF NOT EXISTS idx_analysis_runs_market_stage ON analysis_runs(market_id, stage);
+            CREATE INDEX IF NOT EXISTS idx_t1_market_created ON analysis_outputs_t1(market_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_t2_market_created ON analysis_outputs_t2(market_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_signals_market_created ON signals(market_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_market_outcomes_resolution ON market_outcomes(final_resolution);
+            CREATE INDEX IF NOT EXISTS idx_calibration_model_bucket ON calibration_metrics(model, prompt_version, time_bucket);
         """)
         await self._connection.commit()
     
@@ -277,6 +392,194 @@ class MarketDatabase:
         """, (min_probability, limit)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    async def save_analysis_run(
+        self,
+        market_id: str,
+        stage: str,
+        run_id: str,
+        model: str,
+        prompt_version: str,
+        strategy_version: str,
+        status: str,
+        latency_ms: Optional[int] = None,
+        token_cost_usd: Optional[float] = None,
+        error_message: Optional[str] = None
+    ) -> int:
+        """Persist run metadata for deterministic replay."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self._connection.execute("""
+            INSERT INTO analysis_runs (
+                market_id, stage, run_id, model, prompt_version, strategy_version,
+                latency_ms, token_cost_usd, status, error_message, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            market_id, stage, run_id, model, prompt_version, strategy_version,
+            latency_ms, token_cost_usd, status, error_message, now
+        ))
+        await self._connection.commit()
+        return cursor.lastrowid
+
+    async def save_tier1_output(
+        self,
+        analysis_run_id: int,
+        market_id: str,
+        screen_decision: str,
+        ambiguity_score: float,
+        dispute_prob_prior: float,
+        top_risks: List[str],
+        rationale_short: str
+    ) -> int:
+        """Persist validated Tier 1 output contract."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self._connection.execute("""
+            INSERT INTO analysis_outputs_t1 (
+                analysis_run_id, market_id, screen_decision, ambiguity_score,
+                dispute_prob_prior, top_risks, rationale_short, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            analysis_run_id, market_id, screen_decision, ambiguity_score,
+            dispute_prob_prior, json.dumps(top_risks), rationale_short, now
+        ))
+        await self._connection.commit()
+        return cursor.lastrowid
+
+    async def save_tier2_output(
+        self,
+        analysis_run_id: int,
+        market_id: str,
+        p_dispute: float,
+        p_yes_final: float,
+        p_no_final: float,
+        p_invalid_final: float,
+        confidence: float,
+        resolution_source_risk: str,
+        edge_cases: List[str],
+        decision_path: str,
+        no_trade_reason: Optional[str],
+        assumptions: List[str]
+    ) -> int:
+        """Persist validated Tier 2 output contract."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self._connection.execute("""
+            INSERT INTO analysis_outputs_t2 (
+                analysis_run_id, market_id, p_dispute, p_yes_final, p_no_final,
+                p_invalid_final, confidence, resolution_source_risk, edge_cases,
+                decision_path, no_trade_reason, assumptions, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            analysis_run_id, market_id, p_dispute, p_yes_final, p_no_final,
+            p_invalid_final, confidence, resolution_source_risk, json.dumps(edge_cases),
+            decision_path, no_trade_reason, json.dumps(assumptions), now
+        ))
+        await self._connection.commit()
+        return cursor.lastrowid
+
+    async def save_signal(
+        self,
+        market_id: str,
+        action: str,
+        reason_code: str,
+        strategy_version: str,
+        analysis_run_id: Optional[int] = None,
+        side: Optional[str] = None,
+        confidence: Optional[float] = None,
+        edge_yes: Optional[float] = None,
+        edge_no: Optional[float] = None,
+        edge_selected: Optional[float] = None,
+        yes_price_snapshot: Optional[float] = None,
+        no_price_snapshot: Optional[float] = None,
+        liquidity_snapshot: Optional[float] = None,
+        reason_detail: Optional[str] = None
+    ) -> int:
+        """Persist signal with edge context for replay."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self._connection.execute("""
+            INSERT INTO signals (
+                market_id, analysis_run_id, action, side, confidence, edge_yes, edge_no,
+                edge_selected, yes_price_snapshot, no_price_snapshot, liquidity_snapshot,
+                reason_code, reason_detail, strategy_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            market_id, analysis_run_id, action, side, confidence, edge_yes, edge_no,
+            edge_selected, yes_price_snapshot, no_price_snapshot, liquidity_snapshot,
+            reason_code, reason_detail, strategy_version, now
+        ))
+        await self._connection.commit()
+        return cursor.lastrowid
+
+    async def save_market_outcome(
+        self,
+        market_id: str,
+        disputed: bool,
+        final_resolution: str,
+        settled_at: str,
+        time_to_resolution_hours: Optional[float] = None,
+        source_run_id: Optional[str] = None
+    ) -> int:
+        """Persist market settlement ground truth labels."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self._connection.execute("""
+            INSERT INTO market_outcomes (
+                market_id, disputed, final_resolution, time_to_resolution_hours,
+                source_run_id, settled_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(market_id) DO UPDATE SET
+                disputed = excluded.disputed,
+                final_resolution = excluded.final_resolution,
+                time_to_resolution_hours = excluded.time_to_resolution_hours,
+                source_run_id = excluded.source_run_id,
+                settled_at = excluded.settled_at
+        """, (
+            market_id, int(disputed), final_resolution, time_to_resolution_hours,
+            source_run_id, settled_at, now
+        ))
+        await self._connection.commit()
+        return cursor.lastrowid
+
+    async def save_calibration_metric(
+        self,
+        model: str,
+        prompt_version: str,
+        strategy_version: str,
+        time_bucket: str,
+        sample_size: int,
+        brier_score: Optional[float],
+        log_loss: Optional[float],
+        calibration_error: Optional[float],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """Persist calibration snapshots for model tracking."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self._connection.execute("""
+            INSERT INTO calibration_metrics (
+                model, prompt_version, strategy_version, time_bucket, sample_size,
+                brier_score, log_loss, calibration_error, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            model, prompt_version, strategy_version, time_bucket, sample_size,
+            brier_score, log_loss, calibration_error, json.dumps(metadata or {}), now
+        ))
+        await self._connection.commit()
+        return cursor.lastrowid
+
+    async def get_signal_replay(self, signal_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a signal with run and model artifacts for deterministic replay."""
+        async with self._connection.execute("""
+            SELECT
+                s.*,
+                ar.run_id,
+                ar.stage,
+                ar.model,
+                ar.prompt_version,
+                ar.strategy_version AS run_strategy_version,
+                ar.status AS run_status
+            FROM signals s
+            LEFT JOIN analysis_runs ar ON s.analysis_run_id = ar.id
+            WHERE s.id = ?
+        """, (signal_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
     
     # --- Stats ---
     
