@@ -79,6 +79,7 @@ src/
 ### Strategy Documentation
 - `docs/DISPUTE_PREDICTION_STRATEGY.md` - Strategy overview
 - `docs/APPENDIX_KELLY_CRITERION.md` - Position sizing theory
+- `docs/WORKTREE_COLLAB_PROTOCOL.md` - Parallel branch/worktree operating rules
 
 ## What's NOT Built Yet (Dispute Strategy)
 - LLM analysis pipeline (Tier 1 screening, Tier 2 deep analysis)
