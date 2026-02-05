@@ -14,3 +14,9 @@ Branch: `codex/resolution-tier1`
 - Malformed model output does not crash pipeline.
 - PASS/FLAG behavior tested.
 - Prompt/model/version metadata always stored.
+
+## Progress
+
+- Contract parser/validator implemented and merged.
+- Contract tests implemented and passing.
+- Baseline integration now persists Tier 1 outputs through `persist_tier1_result`.

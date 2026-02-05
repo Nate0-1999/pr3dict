@@ -10,6 +10,21 @@ Out of scope:
 - Arbitrage, market making, or other strategy rewrites
 - Production real-money auto-execution
 
+## Current Status (2026-02-05)
+
+- Completed and merged:
+  - WT-A schema + data contracts
+  - WT-B Tier 1 contract scaffold
+  - WT-C Tier 2 contract scaffold
+  - WT-D signal/sizing primitives
+  - WT-E evaluation helpers
+- New baseline integration step added:
+  - Tier 1/Tier 2 persistence wiring to WT-A contracts via `src/strategies/dispute/pipeline.py`
+  - Persistence integration tests in `test_dispute_pipeline_persistence.py`
+- Next focus:
+  - connect live Tier 1/Tier 2 model runners to `persist_tier1_result` / `persist_tier2_result`
+  - add signal emission persistence from `signal_engine` into `signals`
+
 ## Workstream Layout
 
 ## WT-A: Data Contracts + Schema

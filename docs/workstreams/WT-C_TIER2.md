@@ -14,3 +14,9 @@ Branch: `codex/resolution-tier2`
 - Valid outputs persist.
 - Invalid outputs are rejected with reason logging.
 - Decision path taxonomy covered by tests.
+
+## Progress
+
+- Contract parser/validator implemented and merged.
+- Contract tests implemented and passing.
+- Baseline integration now persists Tier 2 outputs through `persist_tier2_result`.
