@@ -15,6 +15,7 @@ from .vwap_integration import (
     StrategyVWAPIntegration,
     get_vwap_gate,
 )
+from .arb_v1_state_machine import ArbV1State, ArbV1StateMachine, TransitionResult
 
 __all__ = [
     # Execution
@@ -27,4 +28,8 @@ __all__ = [
     "VWAPEnrichedSignal",
     "StrategyVWAPIntegration",
     "get_vwap_gate",
+    # Arb v1 lifecycle
+    "ArbV1State",
+    "ArbV1StateMachine",
+    "TransitionResult",
 ]
