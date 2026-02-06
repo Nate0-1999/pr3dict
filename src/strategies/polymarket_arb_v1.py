@@ -34,6 +34,7 @@ class PolymarketArbV1Config:
     max_time_to_resolution_hours: int = 24 * 30
     probe_quantity_contracts: int = 25
     fee_buffer_bps: int = 10
+    max_signal_contracts: int = 200
 
 
 class PolymarketArbitrageV1Strategy(TradingStrategy):
@@ -119,6 +120,16 @@ class PolymarketArbitrageV1Strategy(TradingStrategy):
                         f"(paired NO leg required)"
                     ),
                     target_price=complement.yes_buy.executable_price,
+                    metadata={
+                        "opportunity_id": opportunity.opportunity_id,
+                        "ttl_ms": opportunity.ttl_ms,
+                        "expected_edge_bps": net_edge_bps,
+                        "suggested_size": int(min(self.config.max_signal_contracts, decision.size_adjusted_contracts)),
+                        "paired_leg": {
+                            "side": OrderSide.NO.value,
+                            "target_price": str(complement.no_buy.executable_price),
+                        },
+                    },
                 )
             )
 
@@ -127,3 +138,14 @@ class PolymarketArbitrageV1Strategy(TradingStrategy):
     async def check_exit(self, position: Position, market: Market) -> Optional[Signal]:
         # v1 focuses on entry plumbing; existing exit behavior remains unchanged.
         return None
+
+    def get_position_size(
+        self,
+        signal: Signal,
+        account_balance: Decimal,
+        risk_pct: float = 0.02,
+    ) -> int:
+        planned = signal.metadata.get("suggested_size")
+        if isinstance(planned, int) and planned > 0:
+            return planned
+        return super().get_position_size(signal, account_balance, risk_pct=risk_pct)

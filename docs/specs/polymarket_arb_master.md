@@ -5,8 +5,9 @@ Owner: PR3DICT arbitrage planning thread
 Last updated: 2026-02-04
 
 ## Implementation Status
-- M1 in progress: executable pricing, staleness checks, and risk-gate plumbing added in Python.
+- M1 complete in branch lane: executable pricing, staleness checks, and risk-gate plumbing added in Python.
 - M2 in progress: opportunity engine ports and execution lifecycle state machine scaffolded.
+- M2 update: paired-leg entry contract now wired through engine execution path (paper + live fallback handling).
 
 ## Purpose
 This is the single source of truth for Polymarket arbitrage planning and implementation decisions.

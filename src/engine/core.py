@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from ..platforms.base import PlatformInterface, Market, Position, OrderSide, OrderType
 from ..strategies.base import TradingStrategy, Signal
+from ..execution import ArbV1State, ArbV1StateMachine
 from ..risk.manager import RiskManager
 from ..notifications.manager import NotificationManager
 
@@ -63,6 +64,7 @@ class TradingEngine:
         self.notifications = notifications
         self.config = config or EngineConfig()
         self.state = EngineState()
+        self._arb_v1_state_machine = ArbV1StateMachine()
         
         self._task: Optional[asyncio.Task] = None
         self._start_time: Optional[datetime] = None
@@ -274,6 +276,11 @@ class TradingEngine:
         if not platform:
             logger.error(f"Platform {signal.market.platform} not connected")
             return
+
+        paired_leg = signal.metadata.get("paired_leg")
+        if strategy_name == "polymarket_arb_v1" and isinstance(paired_leg, dict):
+            await self._execute_paired_entry(signal, size, platform)
+            return
         
         logger.info(f"ENTRY: {signal.market.ticker} {signal.side.value.upper()} "
                    f"x{size} @ {signal.target_price or 'MKT'} - {signal.reason}")
@@ -311,6 +318,138 @@ class TradingEngine:
                     error_msg=f"Order placement failed: {e}",
                     context=f"Market: {signal.market.ticker}, Side: {signal.side.value}"
                 )
+
+    async def _execute_paired_entry(self, signal: Signal, size: int, platform: PlatformInterface) -> None:
+        """
+        Execute paired YES/NO legs for combinatorial arb.
+
+        Conservative policy:
+        - if both legs are not cleanly filled, treat as partial/failure
+        - attempt immediate flatten for any filled exposure
+        """
+        state = ArbV1State.DISCOVERED
+        opportunity_id = signal.metadata.get("opportunity_id", "unknown")
+        paired_leg = signal.metadata.get("paired_leg", {})
+
+        state = self._transition_state(state, ArbV1State.PRICED_EXECUTABLE, opportunity_id)
+        state = self._transition_state(state, ArbV1State.RISK_APPROVED, opportunity_id)
+        state = self._transition_state(state, ArbV1State.EXECUTION_SUBMITTED, opportunity_id)
+
+        paired_side_raw = str(paired_leg.get("side", "")).lower()
+        if paired_side_raw not in (OrderSide.YES.value, OrderSide.NO.value):
+            logger.error(f"Invalid paired leg side for opportunity {opportunity_id}: {paired_side_raw}")
+            state = self._transition_state(state, ArbV1State.FAILED, opportunity_id)
+            self._transition_state(state, ArbV1State.CLOSED, opportunity_id)
+            return
+
+        paired_side = OrderSide.YES if paired_side_raw == OrderSide.YES.value else OrderSide.NO
+        paired_price_raw = paired_leg.get("target_price")
+        paired_price = None
+        if paired_price_raw is not None:
+            paired_price = Decimal(str(paired_price_raw))
+
+        if self.config.paper_mode:
+            logger.info(
+                f"[PAPER] PAIRED ENTRY: {signal.market.ticker} "
+                f"{signal.side.value.upper()}+{paired_side.value.upper()} x{size} "
+                f"opp={opportunity_id}"
+            )
+            state = self._transition_state(state, ArbV1State.FILLED, opportunity_id)
+            self._transition_state(state, ArbV1State.CLOSED, opportunity_id)
+            return
+
+        logger.info(
+            f"PAIRED ENTRY: {signal.market.ticker} {signal.side.value.upper()}+{paired_side.value.upper()} "
+            f"x{size} opp={opportunity_id}"
+        )
+
+        primary_order_type = OrderType.LIMIT if signal.target_price else OrderType.MARKET
+        paired_order_type = OrderType.LIMIT if paired_price is not None else OrderType.MARKET
+
+        results = await asyncio.gather(
+            platform.place_order(
+                market_id=signal.market_id,
+                side=signal.side,
+                order_type=primary_order_type,
+                quantity=size,
+                price=signal.target_price,
+            ),
+            platform.place_order(
+                market_id=signal.market_id,
+                side=paired_side,
+                order_type=paired_order_type,
+                quantity=size,
+                price=paired_price,
+            ),
+            return_exceptions=True,
+        )
+
+        orders = []
+        had_exception = False
+        for result in results:
+            if isinstance(result, Exception):
+                had_exception = True
+                logger.error(f"Paired leg placement error for {opportunity_id}: {result}")
+            else:
+                orders.append(result)
+
+        if had_exception or len(orders) != 2:
+            state = self._transition_state(state, ArbV1State.FAILED, opportunity_id)
+            await self._flatten_residual_exposure(platform, signal.market_id, orders, size, opportunity_id)
+            self._transition_state(state, ArbV1State.CLOSED, opportunity_id)
+            return
+
+        fully_filled = all(o.filled_quantity >= size for o in orders)
+        if fully_filled:
+            state = self._transition_state(state, ArbV1State.FILLED, opportunity_id)
+            self._transition_state(state, ArbV1State.CLOSED, opportunity_id)
+            self.state.trades_today += 1
+            return
+
+        state = self._transition_state(state, ArbV1State.PARTIAL_FILL, opportunity_id)
+        await self._flatten_residual_exposure(platform, signal.market_id, orders, size, opportunity_id)
+        state = self._transition_state(state, ArbV1State.HEDGED_OR_FLATTENED, opportunity_id)
+        self._transition_state(state, ArbV1State.CLOSED, opportunity_id)
+
+    def _transition_state(self, state: ArbV1State, target: ArbV1State, opportunity_id: str) -> ArbV1State:
+        transition = self._arb_v1_state_machine.transition(state, target)
+        if not transition.valid:
+            logger.warning(f"Invalid arb v1 state transition for {opportunity_id}: {transition.reason}")
+            return state
+        return target
+
+    async def _flatten_residual_exposure(
+        self,
+        platform: PlatformInterface,
+        market_id: str,
+        orders: List,
+        expected_qty: int,
+        opportunity_id: str,
+    ) -> None:
+        """Flatten any partial exposure from paired execution failures."""
+        for order in orders:
+            if order is None:
+                continue
+            filled = max(0, int(getattr(order, "filled_quantity", 0)))
+            if filled <= 0:
+                continue
+
+            # Flatten only the filled exposure.
+            flatten_qty = min(filled, expected_qty)
+            flatten_side = OrderSide.NO if order.side == OrderSide.YES else OrderSide.YES
+            try:
+                await platform.place_order(
+                    market_id=market_id,
+                    side=flatten_side,
+                    order_type=OrderType.MARKET,
+                    quantity=flatten_qty,
+                )
+                logger.warning(
+                    f"Flattened residual exposure for {opportunity_id}: "
+                    f"{flatten_side.value.upper()} x{flatten_qty}"
+                )
+            except Exception as e:
+                logger.error(f"Failed flatten order for {opportunity_id}: {e}")
     
     async def _execute_exit(self, position: Position, signal: Signal) -> None:
         """Execute an exit order."""
