@@ -105,9 +105,12 @@ async def test_persist_tier2_success(tmp_path: Path):
     assert result.output_db_id is not None
     assert result.normalization_applied is False
 
-    async with db._connection.execute("SELECT COUNT(*) FROM analysis_outputs_t2") as cursor:
-        count = (await cursor.fetchone())[0]
-    assert count == 1
+    async with db._connection.execute(
+        "SELECT COUNT(*), normalization_applied FROM analysis_outputs_t2"
+    ) as cursor:
+        row = await cursor.fetchone()
+    assert row[0] == 1
+    assert row[1] == 0
     await db.close()
 
 
@@ -138,12 +141,13 @@ async def test_persist_tier2_small_drift_is_normalized(tmp_path: Path):
     assert result.normalization_applied is True
 
     async with db._connection.execute(
-        "SELECT p_yes_final, p_no_final, p_invalid_final FROM analysis_outputs_t2 WHERE id = ?",
+        "SELECT p_yes_final, p_no_final, p_invalid_final, normalization_applied FROM analysis_outputs_t2 WHERE id = ?",
         (result.output_db_id,),
     ) as cursor:
         row = await cursor.fetchone()
     assert row is not None
-    assert pytest.approx(sum(row), abs=1e-9) == 1.0
+    assert pytest.approx(row[0] + row[1] + row[2], abs=1e-9) == 1.0
+    assert row[3] == 1
     await db.close()
 
 

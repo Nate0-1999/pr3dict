@@ -113,6 +113,7 @@ Consumes:
 Delivers:
 - Actions: `ENTER_YES`, `ENTER_NO`, `EXIT`, `HOLD`, `NO_TRADE`
 - Edge math after fees/slippage haircuts
+- Stop-loss parameterized trigger (`STOP_LOSS_PCT`) attached to entry signals
 - Fractional Kelly sizing with confidence/invalid/liquidity discounts
 - Cap enforcement:
   - `MAX_POSITION_PCT`
@@ -192,5 +193,6 @@ Each stream merges via repo policy:
 - `INITIATION_CONFIDENCE=0.75`
 - `KELLY_FRACTION=0.25`
 - `MAX_POSITION_PCT=0.05`
+- `STOP_LOSS_PCT=0.15`
 
 All values remain config-driven and easy to tune after backtesting.

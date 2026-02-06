@@ -160,6 +160,7 @@ async def persist_tier2_result(
         decision_path=output.decision_path,
         no_trade_reason=output.no_trade_reason,
         assumptions=output.assumptions,
+        normalization_applied=normalization_applied,
     )
     return PersistResult(
         stage="tier2",

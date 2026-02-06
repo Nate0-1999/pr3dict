@@ -156,6 +156,7 @@ class MarketDatabase:
                 decision_path TEXT NOT NULL,          -- pre_dispute, post_proposal, active_dispute, initiate_dispute, no_trade
                 no_trade_reason TEXT,
                 assumptions TEXT NOT NULL,            -- JSON array
+                normalization_applied INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id),
                 FOREIGN KEY (market_id) REFERENCES markets(id)
@@ -175,6 +176,8 @@ class MarketDatabase:
                 yes_price_snapshot REAL,
                 no_price_snapshot REAL,
                 liquidity_snapshot REAL,
+                stop_loss_price_snapshot REAL,
+                stop_loss_pct REAL,
                 reason_code TEXT NOT NULL,
                 reason_detail TEXT,
                 strategy_version TEXT NOT NULL,
@@ -224,7 +227,20 @@ class MarketDatabase:
             CREATE INDEX IF NOT EXISTS idx_market_outcomes_resolution ON market_outcomes(final_resolution);
             CREATE INDEX IF NOT EXISTS idx_calibration_model_bucket ON calibration_metrics(model, prompt_version, time_bucket);
         """)
+        # Backward-compatible additive migrations for already-created local DBs.
+        await self._ensure_column("analysis_outputs_t2", "normalization_applied", "INTEGER NOT NULL DEFAULT 0")
+        await self._ensure_column("signals", "stop_loss_price_snapshot", "REAL")
+        await self._ensure_column("signals", "stop_loss_pct", "REAL")
         await self._connection.commit()
+
+    async def _ensure_column(self, table: str, column: str, declaration: str) -> None:
+        """Add a column if missing; no-op when already present."""
+        async with self._connection.execute(f"PRAGMA table_info({table})") as cursor:
+            rows = await cursor.fetchall()
+        existing = {row[1] for row in rows}
+        if column in existing:
+            return
+        await self._connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
     
     # --- Market Operations ---
     
@@ -457,7 +473,8 @@ class MarketDatabase:
         edge_cases: List[str],
         decision_path: str,
         no_trade_reason: Optional[str],
-        assumptions: List[str]
+        assumptions: List[str],
+        normalization_applied: bool = False
     ) -> int:
         """Persist validated Tier 2 output contract."""
         now = datetime.now(timezone.utc).isoformat()
@@ -465,12 +482,12 @@ class MarketDatabase:
             INSERT INTO analysis_outputs_t2 (
                 analysis_run_id, market_id, p_dispute, p_yes_final, p_no_final,
                 p_invalid_final, confidence, resolution_source_risk, edge_cases,
-                decision_path, no_trade_reason, assumptions, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                decision_path, no_trade_reason, assumptions, normalization_applied, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             analysis_run_id, market_id, p_dispute, p_yes_final, p_no_final,
             p_invalid_final, confidence, resolution_source_risk, json.dumps(edge_cases),
-            decision_path, no_trade_reason, json.dumps(assumptions), now
+            decision_path, no_trade_reason, json.dumps(assumptions), int(normalization_applied), now
         ))
         await self._connection.commit()
         return cursor.lastrowid
@@ -490,6 +507,8 @@ class MarketDatabase:
         yes_price_snapshot: Optional[float] = None,
         no_price_snapshot: Optional[float] = None,
         liquidity_snapshot: Optional[float] = None,
+        stop_loss_price_snapshot: Optional[float] = None,
+        stop_loss_pct: Optional[float] = None,
         reason_detail: Optional[str] = None
     ) -> int:
         """Persist signal with edge context for replay."""
@@ -498,11 +517,13 @@ class MarketDatabase:
             INSERT INTO signals (
                 market_id, analysis_run_id, action, side, confidence, edge_yes, edge_no,
                 edge_selected, yes_price_snapshot, no_price_snapshot, liquidity_snapshot,
+                stop_loss_price_snapshot, stop_loss_pct,
                 reason_code, reason_detail, strategy_version, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             market_id, analysis_run_id, action, side, confidence, edge_yes, edge_no,
             edge_selected, yes_price_snapshot, no_price_snapshot, liquidity_snapshot,
+            stop_loss_price_snapshot, stop_loss_pct,
             reason_code, reason_detail, strategy_version, now
         ))
         await self._connection.commit()

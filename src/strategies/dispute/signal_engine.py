@@ -14,6 +14,8 @@ class SignalDecision:
     edge_yes: Optional[float] = None
     edge_no: Optional[float] = None
     edge_selected: Optional[float] = None
+    stop_loss_price: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
 
 
 @dataclass
@@ -22,6 +24,7 @@ class SizingConfig:
     max_position_pct: float = 0.05
     max_market_exposure_usd: float = 1500.0
     max_strategy_exposure_usd: float = 5000.0
+    stop_loss_pct: float = 0.15
 
 
 def compute_edge(prob: float, price: float, fee_haircut: float, slippage_haircut: float) -> float:
@@ -34,24 +37,74 @@ def validate_action(action: str) -> None:
         raise ValueError(f"unsupported action: {action}")
 
 
+def compute_stop_loss_price(entry_price: float, stop_loss_pct: float) -> float:
+    """Compute stop-loss trigger from entry price and fractional drawdown."""
+    if entry_price <= 0:
+        raise ValueError("entry_price must be > 0")
+    if stop_loss_pct <= 0 or stop_loss_pct >= 1:
+        raise ValueError("stop_loss_pct must be in (0,1)")
+    return max(0.0, entry_price * (1.0 - stop_loss_pct))
+
+
 def choose_action(
     edge_yes: float,
     edge_no: float,
     confidence: float,
     min_edge: float,
     min_confidence: float,
+    entry_yes_price: Optional[float] = None,
+    entry_no_price: Optional[float] = None,
+    stop_loss_pct: Optional[float] = None,
 ) -> SignalDecision:
     """Choose trading action based on edge and confidence gates."""
     if confidence < min_confidence:
-        return SignalDecision(action="NO_TRADE", reason_code="LOW_CONFIDENCE", confidence=confidence, edge_yes=edge_yes, edge_no=edge_no)
+        return SignalDecision(
+            action="NO_TRADE",
+            reason_code="LOW_CONFIDENCE",
+            confidence=confidence,
+            edge_yes=edge_yes,
+            edge_no=edge_no,
+            stop_loss_pct=stop_loss_pct,
+        )
 
     best_edge = max(edge_yes, edge_no)
     if best_edge < min_edge:
-        return SignalDecision(action="NO_TRADE", reason_code="INSUFFICIENT_EDGE", confidence=confidence, edge_yes=edge_yes, edge_no=edge_no)
+        return SignalDecision(
+            action="NO_TRADE",
+            reason_code="INSUFFICIENT_EDGE",
+            confidence=confidence,
+            edge_yes=edge_yes,
+            edge_no=edge_no,
+            stop_loss_pct=stop_loss_pct,
+        )
 
     if edge_yes >= edge_no:
-        return SignalDecision(action="ENTER_YES", reason_code="EDGE_YES", confidence=confidence, edge_yes=edge_yes, edge_no=edge_no, edge_selected=edge_yes)
-    return SignalDecision(action="ENTER_NO", reason_code="EDGE_NO", confidence=confidence, edge_yes=edge_yes, edge_no=edge_no, edge_selected=edge_no)
+        stop_loss_price = None
+        if stop_loss_pct is not None and entry_yes_price is not None:
+            stop_loss_price = compute_stop_loss_price(entry_yes_price, stop_loss_pct)
+        return SignalDecision(
+            action="ENTER_YES",
+            reason_code="EDGE_YES",
+            confidence=confidence,
+            edge_yes=edge_yes,
+            edge_no=edge_no,
+            edge_selected=edge_yes,
+            stop_loss_price=stop_loss_price,
+            stop_loss_pct=stop_loss_pct,
+        )
+    stop_loss_price = None
+    if stop_loss_pct is not None and entry_no_price is not None:
+        stop_loss_price = compute_stop_loss_price(entry_no_price, stop_loss_pct)
+    return SignalDecision(
+        action="ENTER_NO",
+        reason_code="EDGE_NO",
+        confidence=confidence,
+        edge_yes=edge_yes,
+        edge_no=edge_no,
+        edge_selected=edge_no,
+        stop_loss_price=stop_loss_price,
+        stop_loss_pct=stop_loss_pct,
+    )
 
 
 def compute_position_size_usd(

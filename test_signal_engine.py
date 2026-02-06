@@ -6,6 +6,7 @@ from src.strategies.dispute.signal_engine import (
     choose_action,
     compute_edge,
     compute_position_size_usd,
+    compute_stop_loss_price,
 )
 
 
@@ -14,9 +15,19 @@ def test_actions_include_expected_values():
 
 
 def test_choose_action_prefers_best_edge_when_confident():
-    signal = choose_action(edge_yes=0.08, edge_no=0.02, confidence=0.75, min_edge=0.03, min_confidence=0.6)
+    signal = choose_action(
+        edge_yes=0.08,
+        edge_no=0.02,
+        confidence=0.75,
+        min_edge=0.03,
+        min_confidence=0.6,
+        entry_yes_price=0.42,
+        stop_loss_pct=0.15,
+    )
     assert signal.action == "ENTER_YES"
     assert signal.reason_code == "EDGE_YES"
+    assert signal.stop_loss_pct == 0.15
+    assert signal.stop_loss_price == pytest.approx(0.357)
 
 
 def test_choose_action_blocks_low_confidence():
@@ -43,3 +54,10 @@ def test_position_size_respects_caps():
 def test_compute_edge_applies_haircuts():
     edge = compute_edge(prob=0.62, price=0.55, fee_haircut=0.01, slippage_haircut=0.02)
     assert pytest.approx(edge, abs=1e-9) == 0.04
+
+
+def test_compute_stop_loss_price_validation():
+    with pytest.raises(ValueError, match="entry_price"):
+        compute_stop_loss_price(0.0, 0.15)
+    with pytest.raises(ValueError, match="stop_loss_pct"):
+        compute_stop_loss_price(0.5, 1.0)

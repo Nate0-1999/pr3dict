@@ -76,6 +76,8 @@ async def test_signal_replay_roundtrip(tmp_path: Path):
         yes_price_snapshot=0.45,
         no_price_snapshot=0.55,
         liquidity_snapshot=5000,
+        stop_loss_price_snapshot=0.38,
+        stop_loss_pct=0.15,
         reason_code="EDGE_OK",
         reason_detail="test",
         strategy_version="sv1",
@@ -86,5 +88,7 @@ async def test_signal_replay_roundtrip(tmp_path: Path):
     assert replay["run_id"] == "run-123"
     assert replay["model"] == "test-model"
     assert replay["action"] == "ENTER_YES"
+    assert replay["stop_loss_price_snapshot"] == pytest.approx(0.38)
+    assert replay["stop_loss_pct"] == pytest.approx(0.15)
 
     await db.close()
