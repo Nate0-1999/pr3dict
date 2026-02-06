@@ -80,12 +80,14 @@ src/
 - `docs/DISPUTE_PREDICTION_STRATEGY.md` - Strategy overview
 - `docs/APPENDIX_KELLY_CRITERION.md` - Position sizing theory
 - `docs/WORKTREE_COLLAB_PROTOCOL.md` - Parallel branch/worktree operating rules
+- `docs/RESOLUTION_ADVANTAGE_WORKTREE_PLAN.md` - Resolution implementation status/plan
 
 ## What's NOT Built Yet (Dispute Strategy)
 - LLM analysis pipeline (Tier 1 screening, Tier 2 deep analysis)
 - Dispute probability scoring
 - Trade execution for dispute strategy
 - RAG/Vector database for learning
+- Production wiring for cross-platform (Polymarket/Kalshi) resolution-equivalence decisions
 
 ## Setup & Commands
 
