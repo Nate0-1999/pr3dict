@@ -5,8 +5,8 @@ Abstract base class for trading strategies.
 Follows ST0CK's Strategy Pattern for decoupled signal/execution logic.
 """
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Optional, List
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 from decimal import Decimal
 from datetime import datetime
 
@@ -24,6 +24,7 @@ class Signal:
     target_price: Optional[Decimal] = None
     stop_price: Optional[Decimal] = None
     timestamp: datetime = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
         if self.timestamp is None:

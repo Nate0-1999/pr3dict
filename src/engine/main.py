@@ -14,8 +14,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.engine import TradingEngine, EngineConfig
 from src.platforms import KalshiPlatform
-from src.strategies import ArbitrageStrategy
+from src.strategies import ArbitrageStrategy, PolymarketArbitrageV1Strategy
 from src.risk import RiskManager, RiskConfig
+from src.notifications import NotificationManager, load_notification_config
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +37,7 @@ async def main():
     parser = argparse.ArgumentParser(description="PR3DICT Trading Engine")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper")
     parser.add_argument("--platform", choices=["kalshi", "polymarket", "all"], default="kalshi")
+    parser.add_argument("--strategy", choices=["arbitrage", "polymarket_arb_v1"], default="arbitrage")
     args = parser.parse_args()
     
     paper_mode = args.mode == "paper"
@@ -60,9 +62,18 @@ async def main():
         return
     
     # Initialize strategies
-    strategies = [
-        ArbitrageStrategy(min_spread=0.025)
-    ]
+    if args.strategy == "polymarket_arb_v1":
+        polymarket_platform = next((p for p in platforms if p.name == "polymarket"), None)
+        if polymarket_platform is None:
+            logger.error("polymarket_arb_v1 strategy requires --platform polymarket or --platform all")
+            return
+        strategies = [
+            PolymarketArbitrageV1Strategy(orderbook_provider=polymarket_platform.get_orderbook)
+        ]
+    else:
+        strategies = [
+            ArbitrageStrategy(min_spread=0.025)
+        ]
     
     # Initialize risk manager
     risk_config = RiskConfig(
@@ -71,6 +82,15 @@ async def main():
         max_portfolio_heat=0.25
     )
     risk_manager = RiskManager(risk_config)
+    
+    # Initialize notifications (optional)
+    notification_config = load_notification_config()
+    notifier = None
+    if notification_config.telegram_enabled or notification_config.discord_enabled:
+        notifier = NotificationManager(notification_config)
+        logger.info("Notifications enabled")
+    else:
+        logger.info("Notifications disabled (set TELEGRAM_ENABLED or DISCORD_ENABLED in .env)")
     
     # Initialize engine
     engine_config = EngineConfig(
@@ -83,7 +103,8 @@ async def main():
         platforms=platforms,
         strategies=strategies,
         risk_manager=risk_manager,
-        config=engine_config
+        config=engine_config,
+        notifications=notifier  # Add notifications
     )
     
     # Run

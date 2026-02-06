@@ -30,8 +30,9 @@ class KalshiPlatform(PlatformInterface):
     - Sandbox: https://demo-trading-api.kalshi.com
     """
     
-    PROD_URL = "https://trading-api.kalshi.com/trade-api/v2"
-    SANDBOX_URL = "https://demo-trading-api.kalshi.com/trade-api/v2"
+    # Updated 2026-02-02: API has moved to api.elections.kalshi.com
+    PROD_URL = "https://api.elections.kalshi.com/trade-api/v2"
+    SANDBOX_URL = "https://api.elections.kalshi.com/trade-api/v2"  # Sandbox may use same URL
     
     def __init__(self, 
                  api_key: Optional[str] = None,
