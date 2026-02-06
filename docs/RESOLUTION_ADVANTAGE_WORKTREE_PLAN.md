@@ -24,9 +24,14 @@ Out of scope:
   - Tier 2 probability simplex policy:
     - normalize when `abs(sum-1.0) <= 0.01`
     - reject as invalid when drift exceeds `0.01`
+  - Cross-platform resolution equivalence layer:
+    - heuristic narrowing for Polymarket/Kalshi candidate pairs
+    - optional OpenRouter fuzzy judge (default `google/gemini-2.5-flash`)
+    - strict decision output (`same_event`, `confidence`, `rationale`)
 - Next focus:
   - connect live Tier 1/Tier 2 model runners to `persist_tier1_result` / `persist_tier2_result`
   - add signal emission persistence from `signal_engine` into `signals`
+  - wire production cross-platform event matching orchestration around `ResolutionEquivalenceEngine`
 
 ## Workstream Layout
 
